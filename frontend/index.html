@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Knowledge Synapse - Hybrid Graph + Vector DB</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- vis-network CDN for visual graph rendering -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="app-container">
+        
+        <!-- Header -->
+        <header class="main-header">
+            <div class="logo-area">
+                <span class="logo-icon">🔮</span>
+                <div class="logo-text">
+                    <h1>AGENT KNOWLEDGE <span>SYNAPSE</span></h1>
+                    <p>Hybrid GraphRAG + Vector Retrieval Engine</p>
+                </div>
+            </div>
+            <div class="db-stats" id="db-status-bar">
+                <div class="stat-badge"><span class="stat-dot"></span> API <b id="api-status">Connecting...</b></div>
+                <div class="stat-badge">Nodes <b id="stat-nodes">0</b></div>
+                <div class="stat-badge">Edges <b id="stat-edges">0</b></div>
+            </div>
+        </header>
+
+        <!-- Workspace Layout -->
+        <main class="workspace">
+            
+            <!-- Sidebar: Ingestion Engine -->
+            <section class="panel panel-left panel-ingest">
+                <div class="panel-header">
+                    <h2>📥 Ingestion Engine</h2>
+                    <p>Crawl URLs or import raw text knowledge</p>
+                </div>
+                <div class="panel-body">
+                    <div class="ingest-tabs">
+                        <button class="tab-btn active" onclick="switchIngestTab('url')">URL Crawler</button>
+                        <button class="tab-btn" onclick="switchIngestTab('text')">Raw Text</button>
+                    </div>
+                    
+                    <div class="tab-content" id="tab-url">
+                        <label for="ingest-url">Knowledge URL</label>
+                        <input type="url" id="ingest-url" placeholder="https://microsoft.github.io/graphrag/" autocomplete="off">
+                        <span class="input-hint">Fetches, cleans, and extracts semantic nodes/edges via LLM</span>
+                    </div>
+                    
+                    <div class="tab-content hidden" id="tab-text">
+                        <label for="ingest-text">Knowledge Source Text</label>
+                        <textarea id="ingest-text" placeholder="Explain the skills, tools, and best practices for this agent here..."></textarea>
+                    </div>
+
+                    <button class="btn btn-primary" id="btn-ingest" onclick="triggerIngest()">
+                        <span class="btn-spinner hidden" id="ingest-spinner"></span>
+                        <span class="btn-text">Ingest to Synapse</span>
+                    </button>
+
+                    <div class="ingest-status hidden" id="ingest-status-box">
+                        <h4 id="ingest-status-title">Ingestion Success!</h4>
+                        <div class="status-meta">
+                            <div>📄 Created chunks: <span id="ingest-chunks">0</span></div>
+                            <div>🏷️ Entities: <span id="ingest-nodes">0</span></div>
+                            <div>🕸️ Relationships: <span id="ingest-edges">0</span></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center Panel: Graph Synapse Visualizer -->
+            <section class="panel panel-center panel-viz">
+                <div class="panel-header">
+                    <div class="viz-header-left">
+                        <h2>🕸️ Synapse Topology</h2>
+                        <p>Real-time visual relationships map of agent knowledge</p>
+                    </div>
+                    <div class="viz-controls">
+                        <button class="btn btn-secondary btn-small" onclick="fitGraph()">Fit Graph</button>
+                        <button class="btn btn-secondary btn-small" id="btn-physics" onclick="togglePhysics(true)">Physics: On</button>
+                    </div>
+                </div>
+                <div class="graph-viewport">
+                    <div id="graph-container"></div>
+                    <div class="viewport-overlay hidden" id="viewport-loading">
+                        <div class="loader"></div>
+                        <p>Generating graph projection...</p>
+                    </div>
+                    <!-- Node Details Glass Panel -->
+                    <div class="node-inspector hidden" id="node-inspector">
+                        <div class="inspector-header">
+                            <span class="node-badge" id="inspect-badge">AGENT</span>
+                            <button class="btn-close" onclick="closeInspector()">×</button>
+                        </div>
+                        <h3 id="inspect-name">Search Agent</h3>
+                        <p class="inspect-desc" id="inspect-desc">Detailed explanation of the node capabilities...</p>
+                        <div class="inspect-props" id="inspect-props">
+                            <!-- Dynamic properties go here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="graph-legend">
+                    <span class="legend-item"><span class="dot agent"></span>Agent</span>
+                    <span class="legend-item"><span class="dot skill"></span>Skill</span>
+                    <span class="legend-item"><span class="dot tool"></span>Tool</span>
+                    <span class="legend-item"><span class="dot practice"></span>Best Practice</span>
+                    <span class="legend-item"><span class="dot theory"></span>Theory</span>
+                    <span class="legend-item"><span class="dot concept"></span>Concept</span>
+                </div>
+            </section>
+
+            <!-- Right Panel: Hybrid Retrieval Center -->
+            <section class="panel panel-right panel-search">
+                <div class="panel-header">
+                    <h2>🧠 Hybrid Retrieval Console</h2>
+                    <p>Vector semantic matches + graph relationships synthesis</p>
+                </div>
+                <div class="panel-body search-body">
+                    
+                    <!-- Search Input -->
+                    <div class="search-input-wrapper">
+                        <input type="text" id="search-query" placeholder="Ask anything about the stored knowledge..." onkeydown="handleSearchKey(event)">
+                        <button class="btn-search-trigger" onclick="triggerSearch()">🔍</button>
+                    </div>
+
+                    <!-- Output Area -->
+                    <div class="search-results-area" id="search-results-area">
+                        <div class="search-placeholder" id="search-placeholder">
+                            <div class="placeholder-icon">🧠</div>
+                            <h4>Awaiting Query</h4>
+                            <p>Search outputs will merge vector similarity and GraphRAG traversals to synthesize grounded answers.</p>
+                        </div>
+
+                        <div class="search-loader-wrapper hidden" id="search-loader">
+                            <div class="quantum-spinner"></div>
+                            <p>Traversing graph nodes & computing wRRF scores...</p>
+                        </div>
+
+                        <!-- Main generated answer box -->
+                        <div class="answer-box hidden" id="answer-box">
+                            <h3 class="answer-title">💫 Grounded Answer Synthesis</h3>
+                            <div class="answer-content markdown-body" id="answer-text">
+                                Synthesized answer text will generate here...
+                            </div>
+                            
+                            <!-- Source References Accordion -->
+                            <div class="source-accordion">
+                                <button class="accordion-header" onclick="toggleAccordion('source-list')">
+                                    📋 Relevant Concept Snippets Retrieved (<span id="source-count">0</span>)
+                                    <span class="acc-arrow">▼</span>
+                                </button>
+                                <div class="accordion-body hidden" id="source-list">
+                                    <!-- Dynamic source chunks populated here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
