@@ -79,8 +79,8 @@ def run_e2e():
     for nid, ntype, name, desc in nodes:
         chunk_id = f"vector_{nid}"
         concept_text = f"{name}: {desc}"
-        emb = search_engine.vector_store.get_embedding(concept_text)
-        search_engine.vector_store.add_vector(chunk_id, nid, concept_text, emb)
+        emb = search_engine.store.vector_store.get_embedding(concept_text)
+        search_engine.store.vector_store.add_vector(chunk_id, nid, concept_text, emb)
         
     print(f"Successfully loaded. Total indexed nodes: {len(nodes)}. Edges: {len(edges)}.")
     

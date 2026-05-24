@@ -1,0 +1,8 @@
+{
+  "conflict_similarity_threshold": 0.88,
+  "gemini_model": "gemini-2.5-flash",
+  "embed_model": "text-embedding-004",
+  "embed_dim": 768,
+  "kuzu_db_path": "kuzu_db.db",
+  "lancedb_path": "vector_index_lance"
+}

@@ -45,6 +45,7 @@
                     <div class="ingest-tabs">
                         <button class="tab-btn active" onclick="switchIngestTab('url')">URL Crawler</button>
                         <button class="tab-btn" onclick="switchIngestTab('text')">Raw Text</button>
+                        <button class="tab-btn" onclick="switchIngestTab('consult')">Consultant</button>
                     </div>
                     
                     <div class="tab-content" id="tab-url">
@@ -56,6 +57,12 @@
                     <div class="tab-content hidden" id="tab-text">
                         <label for="ingest-text">Knowledge Source Text</label>
                         <textarea id="ingest-text" placeholder="Explain the skills, tools, and best practices for this agent here..."></textarea>
+                    </div>
+
+                    <div class="tab-content hidden" id="tab-consult">
+                        <label for="consult-path">Project Root Path</label>
+                        <input type="text" id="consult-path" placeholder="C:\Users\filip\GraphAgentDB" autocomplete="off" value=".">
+                        <span class="input-hint">Scans manifests & auto-bootstraps custom GEMINI.md developer context</span>
                     </div>
 
                     <button class="btn btn-primary" id="btn-ingest" onclick="triggerIngest()">
@@ -82,6 +89,7 @@
                         <p>Real-time visual relationships map of agent knowledge</p>
                     </div>
                     <div class="viz-controls">
+                        <button class="btn btn-secondary btn-small" id="btn-deprecated" onclick="toggleShowDeprecated()">Deprecated: On</button>
                         <button class="btn btn-secondary btn-small" onclick="fitGraph()">Fit Graph</button>
                         <button class="btn btn-secondary btn-small" id="btn-physics" onclick="togglePhysics(true)">Physics: On</button>
                     </div>
@@ -102,6 +110,18 @@
                         <p class="inspect-desc" id="inspect-desc">Detailed explanation of the node capabilities...</p>
                         <div class="inspect-props" id="inspect-props">
                             <!-- Dynamic properties go here -->
+                        </div>
+                    </div>
+                    <!-- Consultant Report Glass Panel -->
+                    <div class="node-inspector hidden" id="consultant-report" style="width: 85%; max-height: 80%; left: 7.5%; top: 10%; transform: none;">
+                        <div class="inspector-header">
+                            <span class="node-badge" style="background-color: var(--accent-magenta);">CONSULTANT</span>
+                            <button class="btn-close" onclick="closeConsultantReport()">×</button>
+                        </div>
+                        <h3>🔮 Bootstrapped Developer Context (GEMINI.md)</h3>
+                        <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1rem;">Architectural guidelines and technology stack scanning results compiled and written to disk.</p>
+                        <div class="markdown-body" id="report-markdown-content" style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; overflow-y: auto; max-height: 250px; font-family: monospace; font-size: 0.75rem; color: var(--text-color); white-space: pre-wrap; text-align: left;">
+                            Report content will generate here...
                         </div>
                     </div>
                 </div>

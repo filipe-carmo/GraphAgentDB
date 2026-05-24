@@ -62,70 +62,28 @@ def get_status():
 def ingest_knowledge(payload: IngestRequest):
     """
     Crawls a URL or takes raw text, parses it, extracts structured Agent/Skill/Tool/Theory nodes,
-    updates the Kuzu Property Graph, computes embeddings, and indexes them in the local Vector DB.
+    updates Kuzu Property Graph and LanceDB, runs conflict/deduplication checks, and maps links via
+    the stateful Librarian LangGraph workflow.
     """
-    extractor = KnowledgeExtractor()
-    vector_store = VectorStore()
+    from .ingestion_agent import harvester, HarvestState
     
-    source_title = "Raw Ingested Knowledge"
-    content_text = ""
-    
-    # 1. Fetch content if URL is provided
-    if payload.url:
-        print(f"Scraping content from URL: {payload.url}")
-        source_title, content_text = extractor.fetch_url_content(payload.url)
-    elif payload.text:
-        content_text = payload.text
-        source_title = "Text chunk: " + payload.text[:30].replace("\n", " ") + "..."
-    else:
-        raise HTTPException(status_code=400, detail="Either 'url' or 'text' must be provided in the payload.")
-        
-    if not content_text.strip():
-        raise HTTPException(status_code=400, detail="The ingested text content is empty.")
-        
     try:
-        # 2. Extract Graph nodes and edges using Antigravity Harness (Gemini fallback)
-        print(f"Extracting knowledge entities and relationships for: {source_title}")
-        extracted_graph = extractor.extract_graph_from_text(content_text, source_title)
+        state = HarvestState(
+            url=payload.url,
+            text=payload.text
+        )
+        result_state = harvester.invoke(state)
         
-        # 3. Store and index Extracted Entities (Nodes) directly
-        for node in extracted_graph.nodes:
-            upsert_node(
-                id=node.id,
-                type=node.type,
-                name=node.name,
-                description=node.description
-            )
+        if result_state.error:
+            raise HTTPException(status_code=500, detail=f"Ingestion failed: {result_state.error}")
             
-            # Compute embedding on the concept name + description directly
-            node_concept_text = f"{node.name}: {node.description}"
-            embedding = vector_store.get_embedding(node_concept_text)
-            vector_store.add_vector(
-                chunk_id=f"vector_{node.id}",
-                node_id=node.id,
-                text=node_concept_text,
-                embedding=embedding
-            )
-            
-        # 4. Store Extracted Relationships (Edges) into Kuzu Property Graph
-        for edge in extracted_graph.edges:
-            try:
-                upsert_edge(
-                    source_id=edge.source_id,
-                    target_id=edge.target_id,
-                    relation_type=edge.relation_type,
-                    properties={"description": edge.description}
-                )
-            except Exception as edge_err:
-                print(f"Skipping edge {edge.source_id} -> {edge.target_id} due to integrity: {edge_err}")
-                
         return {
-            "message": "Knowledge successfully ingested and indexed.",
+            "message": "Knowledge successfully ingested and indexed via Librarian agent.",
             "source_node_id": None,
-            "title": source_title,
-            "nodes_extracted": len(extracted_graph.nodes),
-            "edges_extracted": len(extracted_graph.edges),
-            "vector_chunks_created": len(extracted_graph.nodes)
+            "title": result_state.source_title,
+            "nodes_extracted": len(result_state.distilled_graph.nodes) if result_state.distilled_graph else 0,
+            "edges_extracted": len(result_state.distilled_graph.edges) if result_state.distilled_graph else 0,
+            "vector_chunks_created": len(result_state.committed_nodes)
         }
         
     except Exception as e:
@@ -148,8 +106,37 @@ def search_knowledge(payload: SearchRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
+class BootstrapRequest(BaseModel):
+    project_path: str = Field(..., description="The repository directory path to bootstrap.")
+
+@app.post("/api/consult/bootstrap")
+def bootstrap_project(payload: BootstrapRequest):
+    """
+    Executes the Consultant LangGraph workflow to scan local manifests,
+    retrieve active developer rules, and compile/generate the GEMINI.md file.
+    """
+    from .consultant_agent import consultant, ConsultState
+    
+    try:
+        state = ConsultState(project_path=payload.project_path)
+        result = consultant.invoke(state.model_dump())
+        
+        if result.get("error"):
+            raise HTTPException(status_code=500, detail=result.get("error"))
+            
+        return {
+            "message": "Project context bootstrapped successfully.",
+            "stack_keys": result.get("stack_keys", []),
+            "written_paths": result.get("written_paths", []),
+            "markdown_output": result.get("markdown_output", "")
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/graph")
-def get_graph():
+def get_graph(show_deprecated: bool = True):
     """
     Returns the complete list of nodes and edges in the database.
     Format compatible with frontend vis-network.js.
@@ -158,25 +145,62 @@ def get_graph():
         nodes = get_all_nodes()
         edges = get_all_edges()
         
+        if not show_deprecated:
+            # Filter out deprecated nodes
+            deprecated_ids = {n["id"] for n in nodes if n.get("status") == "deprecated"}
+            nodes = [n for n in nodes if n.get("status") != "deprecated"]
+            edges = [e for e in edges if e["source_id"] not in deprecated_ids and e["target_id"] not in deprecated_ids]
+            
         formatted_nodes = []
         for n in nodes:
-            formatted_nodes.append({
+            status_tag = " [DEPRECATED]" if n.get("status") == "deprecated" else ""
+            node_desc = n.get("description", "") or ""
+            if n.get("status") == "deprecated":
+                node_desc = f"<b>Superseded By:</b> {n.get('superseded_by', 'N/A')}<br><b>Reason:</b> {n.get('supersession_reason', '')}<br><br>{node_desc}"
+                
+            node_entry = {
                 "id": n["id"],
-                "label": n["name"],
+                "label": n["name"] + status_tag,
                 "group": n["type"],
-                "title": f"<b>{n['name']}</b> ({n['type'].upper()})<br>{n['description'] or ''}",
-                "description": n["description"]
-            })
+                "title": f"<b>{n['name']}</b> ({n['type'].upper()}){status_tag}<br>{node_desc}",
+                "description": n.get("description", ""),
+                "status": n.get("status", "active")
+            }
+            
+            # Style deprecated nodes distinctly for frontend Vis-Network
+            if n.get("status") == "deprecated":
+                node_entry.update({
+                    "color": {
+                        "background": "#2d3748",
+                        "border": "#4a5568",
+                        "highlight": {"background": "#4a5568", "border": "#718096"}
+                    },
+                    "font": {"color": "#718096"},
+                    "borderWidth": 2,
+                    "borderWidthSelected": 3,
+                    "opacity": 0.5
+                })
+            formatted_nodes.append(node_entry)
             
         formatted_edges = []
         for e in edges:
-            formatted_edges.append({
+            edge_entry = {
                 "id": e["id"],
                 "from": e["source_id"],
                 "to": e["target_id"],
                 "label": e["relation_type"],
-                "title": e["properties"].get("description", "")
-            })
+                "title": e["properties"].get("description", ""),
+                "relation_type": e["relation_type"]
+            }
+            
+            # Style SUPERSEDES relationships as dashed red arrows
+            if e["relation_type"] == "SUPERSEDES":
+                edge_entry.update({
+                    "color": {"color": "#ef4444", "highlight": "#f87171"},
+                    "dashes": True,
+                    "width": 2
+                })
+            formatted_edges.append(edge_entry)
             
         return {
             "nodes": formatted_nodes,

@@ -1,36 +1,51 @@
 import os
 import json
-import sqlite3
 from typing import List, Dict, Any, Optional
 import numpy as np
+import lancedb
+import pyarrow as pa
 from google import genai
 from google.genai.errors import APIError
+from .settings import settings
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "vector_index.db")
+DEFAULT_DB_DIR = settings.lancedb_path
 
 class VectorStore:
-    def __init__(self, db_path: str = DB_FILE):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            self.db_path = DEFAULT_DB_DIR
+        else:
+            # Backwards compatibility: if an SQLite .db path is passed,
+            # translate it to a corresponding LanceDB folder path.
+            if db_path.endswith(".db"):
+                self.db_path = db_path.replace(".db", "_lance")
+            else:
+                self.db_path = db_path
+                
         self._init_db()
         self.client = self._init_gemini_client()
 
     def _init_db(self):
-        """Creates the vectors table in the SQLite database if it doesn't exist."""
+        """Creates the vectors table in the LanceDB database if it doesn't exist."""
         dir_name = os.path.dirname(self.db_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA foreign_keys = ON;")
-            cursor = conn.cursor()
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS vectors (
-                chunk_id TEXT PRIMARY KEY,
-                node_id TEXT NOT NULL,
-                text TEXT NOT NULL,
-                embedding TEXT NOT NULL -- JSON serialized list of floats
-            );
-            """)
-            conn.commit()
+            
+        # Connect to serverless LanceDB database
+        self.db = lancedb.connect(self.db_path)
+        
+        # Schema representing the vector elements (supporting status filtering)
+        schema = pa.schema([
+            pa.field("chunk_id", pa.string()),
+            pa.field("node_id", pa.string()),
+            pa.field("text", pa.string()),
+            pa.field("status", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), settings.embed_dim)) # text-embedding-004 is 768-dim
+        ])
+        
+        if "vectors" not in self.db.list_tables().tables:
+            self.db.create_table("vectors", schema=schema)
+        self.table = self.db.open_table("vectors")
 
     def _init_gemini_client(self) -> Optional[genai.Client]:
         """Initializes the Gemini client if the GEMINI_API_KEY environment variable is set."""
@@ -47,7 +62,7 @@ class VectorStore:
         if self.client:
             try:
                 response = self.client.models.embed_content(
-                    model="text-embedding-004",
+                    model=settings.embed_model,
                     contents=text
                 )
                 if response.embeddings:
@@ -59,28 +74,31 @@ class VectorStore:
         # Generates a 768-dimensional normalized mock vector based on the string hash
         return self._generate_fallback_embedding(text)
 
-    def _generate_fallback_embedding(self, text: str, dimensions: int = 768) -> List[float]:
+    def _generate_fallback_embedding(self, text: str, dimensions: int = None) -> List[float]:
         """Generates a deterministic pseudo-random unit vector based on the text hash."""
+        if dimensions is None:
+            dimensions = settings.embed_dim
         state = sum(ord(c) * (i + 1) for i, c in enumerate(text))
         rng = np.random.default_rng(state)
         vector = rng.standard_normal(dimensions)
         normalized = vector / np.linalg.norm(vector)
         return normalized.tolist()
 
-    def add_vector(self, chunk_id: str, node_id: str, text: str, embedding: List[float]):
+    def add_vector(self, chunk_id: str, node_id: str, text: str, embedding: List[float], status: str = "active"):
         """Saves a chunk's text and its embedding vector associated with a parent Node."""
-        embedding_str = json.dumps(embedding)
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-            INSERT INTO vectors (chunk_id, node_id, text, embedding)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(chunk_id) DO UPDATE SET
-                node_id = excluded.node_id,
-                text = excluded.text,
-                embedding = excluded.embedding;
-            """, (chunk_id, node_id, text, embedding_str))
-            conn.commit()
+        # LanceDB allows deletion by primary identifier before appending to avoid duplication
+        try:
+            self.table.delete(f"chunk_id = '{chunk_id}'")
+        except Exception:
+            pass
+            
+        self.table.add([{
+            "chunk_id": chunk_id,
+            "node_id": node_id,
+            "text": text,
+            "status": status,
+            "vector": embedding
+        }])
 
     def search_vectors(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -88,55 +106,30 @@ class VectorStore:
         Returns:
             List of matches, each containing node_id, chunk_id, text, and score.
         """
-        query_vector = self.get_embedding(query)
-        
-        # Fetch all stored vectors
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT chunk_id, node_id, text, embedding FROM vectors")
-            rows = cursor.fetchall()
-            
-        if not rows:
+        if self.table.count_rows() == 0:
             return []
             
-        chunk_ids = []
-        node_ids = []
-        texts = []
-        embeddings = []
+        query_vector = self.get_embedding(query)
         
-        for r in rows:
-            chunk_ids.append(r["chunk_id"])
-            node_ids.append(r["node_id"])
-            texts.append(r["text"])
-            embeddings.append(json.loads(r["embedding"]))
-            
-        # Convert lists to NumPy arrays for vectorized cosine similarity
-        embedding_matrix = np.array(embeddings) # shape: (num_vectors, dim)
-        query_arr = np.array(query_vector)     # shape: (dim,)
+        # Execute cosine similarity search in LanceDB (filtering for active status)
+        results = (
+            self.table.search(query_vector)
+            .where("status = 'active'")
+            .metric("cosine")
+            .limit(top_k)
+            .to_list()
+        )
         
-        # Cosine similarity formula: dot(A, B) / (norm(A) * norm(B))
-        # Since we normalize query and stored vectors, it's just matrix multiplication!
-        norms_matrix = np.linalg.norm(embedding_matrix, axis=1)
-        norm_query = np.linalg.norm(query_arr)
-        
-        # Prevent divide-by-zero
-        norms_matrix[norms_matrix == 0] = 1e-10
-        if norm_query == 0:
-            norm_query = 1e-10
-            
-        scores = np.dot(embedding_matrix, query_arr) / (norms_matrix * norm_query)
-        
-        # Get top K indices
-        top_indices = np.argsort(scores)[::-1][:top_k]
-        
-        results = []
-        for idx in top_indices:
-            results.append({
-                "chunk_id": chunk_ids[idx],
-                "node_id": node_ids[idx],
-                "text": texts[idx],
-                "score": float(scores[idx])
+        formatted_results = []
+        for r in results:
+            # Cosine similarity = 1 - cosine distance
+            dist = r.get("_distance", 1.0)
+            score = 1.0 - dist
+            formatted_results.append({
+                "chunk_id": r["chunk_id"],
+                "node_id": r["node_id"],
+                "text": r["text"],
+                "score": float(score)
             })
             
-        return results
+        return formatted_results

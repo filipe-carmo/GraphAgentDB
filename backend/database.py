@@ -2,15 +2,18 @@ import os
 import shutil
 from typing import List, Dict, Any, Optional
 import kuzu
+from .settings import settings
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "kuzu_db.db")
+DB_FILE = settings.kuzu_db_path
 
 # Thread-safe connection cache to prevent in-process database lock errors
 _database = None
 
-def get_connection(db_path: str = DB_FILE) -> kuzu.Connection:
+def get_connection(db_path: str = None) -> kuzu.Connection:
     """Returns a connection to the in-process Kuzu Database."""
     global _database
+    if db_path is None:
+        db_path = DB_FILE
     if _database is None:
         dir_name = os.path.dirname(db_path)
         if dir_name:
@@ -19,7 +22,7 @@ def get_connection(db_path: str = DB_FILE) -> kuzu.Connection:
     return kuzu.Connection(_database)
 
 def init_db(db_path: str = DB_FILE):
-    """Initializes Kuzu graph schemas (Node tables and Relationship tables)."""
+    """Initializes Kuzu graph schemas (Node tables and Relationship tables) and migrates older databases."""
     conn = get_connection(db_path)
     
     # 1. Check existing tables in Kuzu Graph
@@ -30,16 +33,27 @@ def init_db(db_path: str = DB_FILE):
 
     # 2. Initialize Node Property Table
     if "Node" not in existing_tables:
-        print("Creating Kuzu Node Table schema...")
+        print("Creating Kuzu Node Table schema with status fields...")
         conn.execute("""
         CREATE NODE TABLE Node (
             id STRING,
             type STRING,
             name STRING,
             description STRING,
+            status STRING,
+            superseded_by STRING,
+            supersession_reason STRING,
             PRIMARY KEY (id)
         )
         """)
+    else:
+        # Migrate existing Node table to support status, superseded_by, and supersession_reason
+        for col in ["status", "superseded_by", "supersession_reason"]:
+            try:
+                conn.execute(f"ALTER TABLE Node ADD {col} STRING")
+                print(f"Migrated Kuzu Node schema: Added column {col}")
+            except Exception:
+                pass # Already exists or couldn't alter
 
     # 3. Initialize Relationships Property Tables
     relationship_types = [
@@ -49,7 +63,8 @@ def init_db(db_path: str = DB_FILE):
         "BASED_ON",
         "REFERENCES",
         "MENTIONS",
-        "IS_A"
+        "IS_A",
+        "SUPERSEDES"
     ]
     
     for rel in relationship_types:
@@ -63,12 +78,17 @@ def upsert_node(
     type: str,
     name: str,
     description: Optional[str] = None,
-    properties: Optional[Dict[str, Any]] = None, # Left for compatibility, description holds the main info
+    properties: Optional[Dict[str, Any]] = None, # Left for compatibility
+    status: str = "active",
+    superseded_by: Optional[str] = "",
+    supersession_reason: Optional[str] = "",
     db_path: str = DB_FILE
 ) -> Dict[str, Any]:
-    """Inserts a new node or updates an existing one inside Kuzu Node Table."""
+    """Inserts a new node or updates an existing one inside Kuzu Node Table including status settings."""
     conn = get_connection(db_path)
     description_val = description or ""
+    superseded_by_val = superseded_by or ""
+    supersession_reason_val = supersession_reason or ""
     
     # Check if node exists
     check_query = "MATCH (n:Node {id: $id}) RETURN n.id"
@@ -80,9 +100,20 @@ def upsert_node(
         MATCH (n:Node {id: $id})
         SET n.type = $type,
             n.name = $name,
-            n.description = $description
+            n.description = $description,
+            n.status = $status,
+            n.superseded_by = $superseded_by,
+            n.supersession_reason = $supersession_reason
         """
-        conn.execute(update_query, {"id": id, "type": type, "name": name, "description": description_val})
+        conn.execute(update_query, {
+            "id": id,
+            "type": type,
+            "name": name,
+            "description": description_val,
+            "status": status,
+            "superseded_by": superseded_by_val,
+            "supersession_reason": supersession_reason_val
+        })
     else:
         # Create node
         create_query = """
@@ -90,12 +121,31 @@ def upsert_node(
             id: $id,
             type: $type,
             name: $name,
-            description: $description
+            description: $description,
+            status: $status,
+            superseded_by: $superseded_by,
+            supersession_reason: $supersession_reason
         })
         """
-        conn.execute(create_query, {"id": id, "type": type, "name": name, "description": description_val})
+        conn.execute(create_query, {
+            "id": id,
+            "type": type,
+            "name": name,
+            "description": description_val,
+            "status": status,
+            "superseded_by": superseded_by_val,
+            "supersession_reason": supersession_reason_val
+        })
         
-    return {"id": id, "type": type, "name": name, "description": description_val}
+    return {
+        "id": id,
+        "type": type,
+        "name": name,
+        "description": description_val,
+        "status": status,
+        "superseded_by": superseded_by_val,
+        "supersession_reason": supersession_reason_val
+    }
 
 def upsert_edge(
     source_id: str,
@@ -111,7 +161,7 @@ def upsert_edge(
         desc = properties["description"]
         
     # Standardize edge relations to matches in Kuzu
-    valid_relations = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A"]
+    valid_relations = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A", "SUPERSEDES"]
     if relation_type not in valid_relations:
         relation_type = "REFERENCES"
         
@@ -140,7 +190,7 @@ def upsert_edge(
 def get_node(node_id: str, db_path: str = DB_FILE) -> Optional[Dict[str, Any]]:
     """Retrieves a single node by its ID from Kuzu."""
     conn = get_connection(db_path)
-    query = "MATCH (n:Node {id: $id}) RETURN n.id, n.type, n.name, n.description"
+    query = "MATCH (n:Node {id: $id}) RETURN n.id, n.type, n.name, n.description, n.status, n.superseded_by, n.supersession_reason"
     result = conn.execute(query, {"id": node_id})
     if result.has_next():
         row = result.get_next()
@@ -149,6 +199,9 @@ def get_node(node_id: str, db_path: str = DB_FILE) -> Optional[Dict[str, Any]]:
             "type": row[1],
             "name": row[2],
             "description": row[3],
+            "status": row[4] or "active",
+            "superseded_by": row[5] or "",
+            "supersession_reason": row[6] or "",
             "properties": {} # For schema compatibility
         }
     return None
@@ -156,7 +209,7 @@ def get_node(node_id: str, db_path: str = DB_FILE) -> Optional[Dict[str, Any]]:
 def get_all_nodes(db_path: str = DB_FILE) -> List[Dict[str, Any]]:
     """Retrieves all Node records from Kuzu Node Table."""
     conn = get_connection(db_path)
-    query = "MATCH (n:Node) RETURN n.id, n.type, n.name, n.description"
+    query = "MATCH (n:Node) RETURN n.id, n.type, n.name, n.description, n.status, n.superseded_by, n.supersession_reason"
     result = conn.execute(query)
     nodes = []
     while result.has_next():
@@ -166,6 +219,9 @@ def get_all_nodes(db_path: str = DB_FILE) -> List[Dict[str, Any]]:
             "type": row[1],
             "name": row[2],
             "description": row[3],
+            "status": row[4] or "active",
+            "superseded_by": row[5] or "",
+            "supersession_reason": row[6] or "",
             "properties": {}
         })
     return nodes
@@ -174,7 +230,7 @@ def get_all_edges(db_path: str = DB_FILE) -> List[Dict[str, Any]]:
     """Retrieves all relationship edges across all Kuzu relationship tables."""
     conn = get_connection(db_path)
     edges = []
-    relationship_types = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A"]
+    relationship_types = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A", "SUPERSEDES"]
     for rel in relationship_types:
         query = f"MATCH (a:Node)-[r:{rel}]->(b:Node) RETURN a.id, b.id, r.description"
         result = conn.execute(query)
@@ -202,7 +258,7 @@ def get_subgraph(start_node_ids: List[str], max_depth: int = 2, db_path: str = D
     frontier = set(start_node_ids)
     
     conn = get_connection(db_path)
-    relationship_types = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A"]
+    relationship_types = ["HAS_SKILL", "HAS_TOOL", "REQUIRES_TOOL", "BASED_ON", "REFERENCES", "MENTIONS", "IS_A", "SUPERSEDES"]
     
     for depth in range(max_depth + 1):
         if not frontier:
@@ -249,7 +305,7 @@ def get_subgraph(start_node_ids: List[str], max_depth: int = 2, db_path: str = D
     # Retrieve all collected nodes
     nodes = []
     if visited_nodes:
-        # Since Cypher IN checks are easy, let's query all nodes invisited_nodes
+        # Since Cypher IN checks are easy, let's query all nodes in visited_nodes
         for nid in visited_nodes:
             node_data = get_node(nid, db_path=db_path)
             if node_data:

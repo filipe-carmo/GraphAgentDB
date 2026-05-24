@@ -1,20 +1,15 @@
 import os
 from typing import List, Dict, Any, Optional, Set
 from google import genai
-from .database import get_node, get_subgraph
-from .vector_store import VectorStore
+from .store import KnowledgeStore
+from .settings import settings
 from .harness import call_harness_agent
 
 class HybridSearchEngine:
     def __init__(self, db_path: Optional[str] = None):
-        if db_path:
-            self.db_path = db_path + "_kuzu.db"
-            self.vector_store = VectorStore(db_path + "_vectors.db")
-        else:
-            self.db_path = os.path.join(os.path.dirname(__file__), "kuzu_db.db")
-            self.vector_store = VectorStore(os.path.join(os.path.dirname(__file__), "vector_index.db"))
-            
-        self.api_key = os.environ.get("GEMINI_API_KEY")
+        # We now use the unified KnowledgeStore database facade
+        self.store = KnowledgeStore()
+        self.api_key = settings.gemini_api_key
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
         else:
@@ -30,7 +25,7 @@ class HybridSearchEngine:
         5. Synthesizes a grounded answer using the Antigravity 2.0 Harness (or fallback clients).
         """
         # Step 1: Vector similarity search
-        vector_hits = self.vector_store.search_vectors(query, top_k=top_k)
+        vector_hits = self.store.semantic_search(query, top_k=top_k)
         if not vector_hits:
             return {
                 "answer": "No matching knowledge could be found in the database. Please ingest some URLs or prompts first.",
@@ -42,7 +37,7 @@ class HybridSearchEngine:
         primary_node_ids = list(set(hit["node_id"] for hit in vector_hits))
         
         # Step 3: Graph Traversal - fetch neighbor subgraph from Kuzu Graph
-        subgraph = get_subgraph(primary_node_ids, max_depth=2, db_path=self.db_path)
+        subgraph = self.store.get_subgraph(primary_node_ids, max_depth=2)
         
         # Step 4: wRRF / Structural Boosting (Agent-as-a-Graph style)
         node_scores = {}

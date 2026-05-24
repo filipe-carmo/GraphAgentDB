@@ -7,6 +7,7 @@ let allNodes = [];
 let allEdges = [];
 let activeIngestTab = "url";
 let graphPhysicsEnabled = true;
+let showDeprecated = true;
 
 // Initialize App
 window.addEventListener("DOMContentLoaded", () => {
@@ -30,16 +31,30 @@ function switchIngestTab(tab) {
     event.currentTarget.classList.add("active");
     
     // Toggle active input panel
+    document.getElementById("tab-url").classList.add("hidden");
+    document.getElementById("tab-text").classList.add("hidden");
+    document.getElementById("tab-consult").classList.add("hidden");
+    
+    const btn = document.getElementById("btn-ingest");
+    const btnText = btn.querySelector(".btn-text");
+    
     if (tab === "url") {
         document.getElementById("tab-url").classList.remove("hidden");
-        document.getElementById("tab-text").classList.add("hidden");
-    } else {
-        document.getElementById("tab-url").classList.add("hidden");
+        btnText.textContent = "Ingest to Synapse";
+    } else if (tab === "text") {
         document.getElementById("tab-text").classList.remove("hidden");
+        btnText.textContent = "Ingest to Synapse";
+    } else if (tab === "consult") {
+        document.getElementById("tab-consult").classList.remove("hidden");
+        btnText.textContent = "Bootstrap Context";
     }
 }
 
 async function triggerIngest() {
+    if (activeIngestTab === "consult") {
+        triggerBootstrap();
+        return;
+    }
     const btn = document.getElementById("btn-ingest");
     const spinner = document.getElementById("ingest-spinner");
     const statusBox = document.getElementById("ingest-status-box");
@@ -115,7 +130,7 @@ async function loadGraph() {
     loader.classList.remove("hidden");
     
     try {
-        const response = await fetch(`${API_HOST}/api/graph`);
+        const response = await fetch(`${API_HOST}/api/graph?show_deprecated=${showDeprecated}`);
         if (!response.ok) throw new Error("Could not retrieve knowledge graph topology.");
         
         const data = await response.json();
@@ -134,14 +149,27 @@ async function loadGraph() {
         
         // Apply group styling rules
         const formattedNodes = allNodes.map(node => {
-            const style = groupStyles[node.group] || { color: { background: "#4b5563", border: "#9ca3af" } };
+            let style = groupStyles[node.group] || { color: { background: "#4b5563", border: "#9ca3af" } };
+            
+            // Override styles for deprecated concepts
+            if (node.status === "deprecated") {
+                style = {
+                    color: {
+                        background: "#2d3748",
+                        border: "#4a5568",
+                        highlight: { background: "#4a5568", border: "#718096" }
+                    },
+                    font: { color: "#718096" }
+                };
+            }
+            
             return {
                 ...node,
                 color: style.color,
                 font: {
                     face: "Outfit",
                     size: 13,
-                    color: "#e2e8f0",
+                    color: node.status === "deprecated" ? "#718096" : "#e2e8f0",
                     ...style.font
                 },
                 shadow: {
@@ -152,22 +180,27 @@ async function loadGraph() {
                     y: 2
                 },
                 shape: "dot",
-                size: node.group === "agent" ? 22 : 14
+                size: node.group === "agent" ? 22 : 14,
+                opacity: node.status === "deprecated" ? 0.5 : 1.0,
+                shapeProperties: {
+                    borderDashes: node.status === "deprecated"
+                }
             };
         });
         
         const formattedEdges = allEdges.map(edge => {
+            const isSupersedes = edge.relation_type === "SUPERSEDES";
             return {
                 ...edge,
                 color: {
-                    color: "rgba(226, 232, 240, 0.15)",
-                    highlight: "#818cf8",
-                    hover: "rgba(226, 232, 240, 0.35)"
+                    color: isSupersedes ? "#ef4444" : "rgba(226, 232, 240, 0.15)",
+                    highlight: isSupersedes ? "#f87171" : "#818cf8",
+                    hover: isSupersedes ? "rgba(239, 68, 68, 0.35)" : "rgba(226, 232, 240, 0.35)"
                 },
                 font: {
                     face: "Inter",
                     size: 9,
-                    color: "#64748b",
+                    color: isSupersedes ? "#ef4444" : "#64748b",
                     strokeWidth: 0
                 },
                 arrows: {
@@ -175,7 +208,9 @@ async function loadGraph() {
                 },
                 smooth: {
                     type: "continuous"
-                }
+                },
+                dashes: isSupersedes,
+                width: isSupersedes ? 2 : 1.5
             };
         });
         
@@ -448,4 +483,62 @@ function parseSimpleMarkdown(md) {
     html = html.replace(/\n\n/g, "<br><br>");
     
     return html;
+}
+
+// Project Consultant Bootstrapping Trigger Actions
+async function triggerBootstrap() {
+    const btn = document.getElementById("btn-ingest");
+    const spinner = document.getElementById("ingest-spinner");
+    const pathInput = document.getElementById("consult-path").value.trim();
+    
+    if (!pathInput) {
+        alert("Please enter a valid project root path.");
+        return;
+    }
+    
+    btn.disabled = true;
+    spinner.classList.remove("hidden");
+    
+    try {
+        const response = await fetch(`${API_HOST}/api/consult/bootstrap`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project_path: pathInput })
+        });
+        
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || "Bootstrap consultant service failed.");
+        }
+        
+        const result = await response.json();
+        
+        // Open the report panel and display the compiled GEMINI.md context
+        const reportPanel = document.getElementById("consultant-report");
+        const reportContent = document.getElementById("report-markdown-content");
+        
+        reportContent.textContent = result.markdown_output;
+        reportPanel.classList.remove("hidden");
+        
+        // Refresh status metrics and reload graph
+        checkBackendStatus();
+        loadGraph();
+    } catch (e) {
+        console.error(e);
+        alert(`Bootstrap failed: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+        spinner.classList.add("hidden");
+    }
+}
+
+function closeConsultantReport() {
+    document.getElementById("consultant-report").classList.add("hidden");
+}
+
+function toggleShowDeprecated() {
+    showDeprecated = !showDeprecated;
+    const btn = document.getElementById("btn-deprecated");
+    btn.textContent = showDeprecated ? "Deprecated: On" : "Deprecated: Off";
+    loadGraph();
 }
