@@ -94,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "online",
             **store.stats(),
             "data_dir": str(settings.data_dir),
-            "gemini_api_active": store.llm.gemini_available,
+            "llm_active": store.llm.claude_available,
         }
 
     @app.post("/api/ingest")

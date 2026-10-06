@@ -11,7 +11,8 @@ from .models import ExtractedEdge, ExtractedGraph, ExtractedNode
 
 logger = logging.getLogger(__name__)
 
-MAX_EXTRACTION_CHARS = 4000
+# Very long pages are cut to keep extraction cost bounded; the cut is logged.
+MAX_EXTRACTION_CHARS = 200_000
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -19,38 +20,20 @@ USER_AGENT = (
 )
 
 EXTRACTION_PROMPT = """
-Analyze the following text describing software agents, tools, skills, best practices, theories,
-or software design principles. Extract the major concepts, skills, tools, agents, theoretical
-models and best practices.
+Build a knowledge graph from the text below, which describes software agents, tools, skills,
+best practices, theories or software design principles.
 
-Represent ONLY the domain knowledge itself. Do NOT create nodes or relationships for the source
-document, page title, URL, website or scraping metadata, and do NOT create REFERENCES or MENTIONS
-edges that point to a source document.
+Nodes are the major concepts in the text. Give each a unique snake_case id and one type:
+agent, skill, tool, best_practice, theoretical_knowledge or concept. Edges connect two of
+those node ids with one relation type: HAS_SKILL, HAS_TOOL, REQUIRES_TOOL, BASED_ON,
+REFERENCES, MENTIONS or IS_A.
 
-Return ONLY a valid JSON object with this structure, with no preamble or trailing remarks:
-{{
-  "nodes": [
-    {{
-      "id": "unique_snake_case_slug",
-      "type": "one of: agent, skill, tool, best_practice, theoretical_knowledge, concept",
-      "name": "Human Readable Name",
-      "description": "Explanation of its capabilities or properties"
-    }}
-  ],
-  "edges": [
-    {{
-      "source_id": "source_node_id",
-      "target_id": "target_node_id",
-      "relation_type": "one of: HAS_SKILL, HAS_TOOL, REQUIRES_TOOL, BASED_ON, REFERENCES, MENTIONS, IS_A",
-      "description": "Why the two are connected"
-    }}
-  ]
-}}
+Capture the domain knowledge only. The graph is reused across many sources, so nodes or
+edges about the source itself (its title, URL, website or page) would be noise.
 
-Text to analyze:
----
+<text>
 {text}
----
+</text>
 """
 
 # Offline keyword extractor, used when no LLM is reachable: keyword -> (type, name, description).
@@ -186,6 +169,12 @@ class KnowledgeExtractor:
         self.llm = llm
 
     def extract(self, text: str) -> ExtractedGraph:
+        if len(text) > MAX_EXTRACTION_CHARS:
+            logger.warning(
+                "Text has %d characters; extracting from the first %d",
+                len(text),
+                MAX_EXTRACTION_CHARS,
+            )
         prompt = EXTRACTION_PROMPT.format(text=text[:MAX_EXTRACTION_CHARS])
         graph = self.llm.generate_json(prompt, ExtractedGraph)
         if graph is not None:

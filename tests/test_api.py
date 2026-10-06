@@ -14,7 +14,7 @@ def test_status(client):
     body = client.get("/api/status").json()
     assert body["status"] == "online"
     assert body["node_count"] == 0
-    assert body["gemini_api_active"] is False
+    assert body["llm_active"] is False
 
 
 def test_ingest_search_and_graph(client):

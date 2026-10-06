@@ -6,12 +6,12 @@ from graphagentdb.store import KnowledgeStore
 
 @pytest.fixture
 def settings(tmp_path, monkeypatch):
-    """Isolated, fully offline settings: no API key, no harness, data under tmp_path."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    """Isolated, fully offline settings: no API key, hash embeddings, data under tmp_path."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     return Settings(
         _env_file=None,
-        gemini_api_key=None,
-        use_agent_harness=False,
+        anthropic_api_key=None,
+        embed_provider="hash",
         data_dir=tmp_path / "data",
     )
 

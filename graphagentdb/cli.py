@@ -123,14 +123,14 @@ def doctor():
         + ("[green]OK[/green]" if py_ok else "[red]needs 3.11+[/red]")
     )
     console.print(
-        "  • GEMINI_API_KEY: "
+        "  • ANTHROPIC_API_KEY: "
         + (
-            "[green]set[/green]"
-            if settings.gemini_api_key
+            f"[green]set[/green] (model {settings.claude_model})"
+            if settings.anthropic_api_key
             else "[yellow]not set (offline mode)[/yellow]"
         )
     )
-    console.print(f"  • Agent harness: {'enabled' if settings.use_agent_harness else 'disabled'}")
+    console.print(f"  • Embeddings: {settings.embed_provider} ({settings.embed_model})")
     console.print(f"  • Data directory: [yellow]{settings.data_dir.resolve()}[/yellow]")
     try:
         totals = _open_store().stats()

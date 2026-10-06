@@ -3,13 +3,7 @@ from unittest.mock import patch
 import requests
 
 from graphagentdb.extractor import fallback_graph, fetch_url_content
-from graphagentdb.llm import strip_code_fences
 from graphagentdb.models import ExtractedEdge, ExtractedNode
-
-
-def test_strip_code_fences():
-    assert strip_code_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
-    assert strip_code_fences('{"a": 1}') == '{"a": 1}'
 
 
 def test_extracted_ids_are_normalized():

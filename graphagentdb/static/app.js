@@ -447,7 +447,7 @@ async function checkBackendStatus() {
         
         const data = await response.json();
         
-        apiStatus.innerHTML = `ONLINE ${data.gemini_api_active ? "⚡" : "⚙️"}`;
+        apiStatus.innerHTML = `ONLINE ${data.llm_active ? "⚡" : "⚙️"}`;
         apiStatus.style.color = "var(--accent-cyan)";
         statNodes.textContent = data.node_count;
         statEdges.textContent = data.edge_count;
@@ -513,7 +513,7 @@ async function triggerBootstrap() {
         
         const result = await response.json();
         
-        // Open the report panel and display the compiled GEMINI.md context
+        // Open the report panel and display the compiled CLAUDE.md context
         const reportPanel = document.getElementById("consultant-report");
         const reportContent = document.getElementById("report-markdown-content");
         

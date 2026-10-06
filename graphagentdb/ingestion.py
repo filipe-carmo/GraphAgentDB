@@ -44,8 +44,6 @@ Decide one of:
 - "duplicate": the new concept is identical to, or a subset of, the existing one. Keep the existing node.
 - "update": same entity, but the new concept has newer or more complete details. Replace the existing node.
 - "new": despite the similarity they are separate entities. Insert the new concept as its own node.
-
-Return a JSON object matching the schema.
 """
 
 
@@ -159,7 +157,7 @@ def build_harvester(store: KnowledgeStore, extractor: KnowledgeExtractor | None 
                 existing["name"],
                 top_score,
             )
-            if llm.gemini_available or store.settings.use_agent_harness:
+            if llm.claude_available:
                 resolution = llm.generate_json(
                     CONFLICT_PROMPT.format(
                         new_id=node.id,

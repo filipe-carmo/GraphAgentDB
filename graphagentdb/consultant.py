@@ -1,5 +1,5 @@
 """The Consultant: scans a project's dependency manifests and writes a context file
-(GEMINI.md by default) listing the active and deprecated practices that apply to its stack.
+(CLAUDE.md by default) listing the active and deprecated practices that apply to its stack.
 
     detect_stack -> query_graph -> generate_markdown -> write_files
 """

@@ -43,7 +43,7 @@ def test_bootstrap_writes_context_file(store, tmp_path):
 
     assert state.error is None
     assert state.stack_keys == ["fastapi"]
-    content = (project / "GEMINI.md").read_text()
+    content = (project / "CLAUDE.md").read_text()
     assert "FastAPI dependency injection" in content
     assert (store.settings.exports_dir / "project.md").exists()
 
