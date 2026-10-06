@@ -1,21 +1,29 @@
-# Virtual Environment
+# Virtual environments
 .venv/
 venv/
 ENV/
 
-# Python Cache
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
 
-# Database Files
+# Secrets
+.env
+
+# Local databases, caches and generated exports (see GRAPHAGENTDB_DATA_DIR)
+data/
+*.kuzu
+*.lance/
+*_lance/
 *.db
 *.db.wal
-*.db.log
-backend/kuzu_db.db
-backend/vector_index.db
 
-# OS / Editor temporary files
+# OS / editor files
 .DS_Store
 Thumbs.db
 .vscode/

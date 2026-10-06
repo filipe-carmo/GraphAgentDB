@@ -1,5 +1,0 @@
-
-        The Factory Pattern is a creational design pattern providing a standard interface for object creation.
-        CRITICAL UPDATE: In modern Python development, the Factory Pattern is best implemented using classmethods
-        or protocols instead of abstract classes, which reduces boilerplate code and improves dynamic type checking.
-        
